@@ -425,29 +425,6 @@ def cancel_order(symbol: str, order_id: int):
     except Exception as e:
         logging.warning(f"❌ Échec annulation ordre {order_id}: {e}")
 
-
-def safe_cancel(symbol: str, order_id: int):
-    """
-    Annulation sécurisée d'un ordre TP/SL.
-    Réessaie silencieusement plusieurs fois si Binance renvoie une erreur temporaire.
-    Utiliser à la place de cancel_order pour s'assurer de l'annulation.
-    """
-    if not order_id:
-        return
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            # appel à la fonction déjà définie pour l'annulation
-            client.futures_cancel_order(symbol=symbol, orderId=order_id)
-            logging.info(f"[SAFE_CANCEL] Order {order_id} cancelled successfully for {symbol} (attempt {attempt})")
-            return
-        except Exception as e:
-            # Si erreur, logguer en debug/warn et réessayer après un court délai
-            logging.warning(f"[SAFE_CANCEL] Attempt {attempt} failed to cancel order {order_id} for {symbol}: {e}")
-            # Pour certaines erreurs, attendre plus longtemps
-            time.sleep(0.8 + 0.4 * attempt)
-    logging.error(f"[SAFE_CANCEL] Unable to cancel order {order_id} for {symbol} after {max_attempts} attempts.")
-
 def get_order_status(symbol: str, order_id: int):
     """Récupère le statut d'un ordre"""
     try:
@@ -475,9 +452,57 @@ def get_position_amount(symbol: str):
         logging.warning(f"⚠️ Erreur vérification position {symbol}: {e}")
         return 1.0  # En cas d'erreur, suppose que la position est active
 
+def cancel_existing_tp_sl_orders(symbol: str):
+    """Annule tous les ordres TP/SL existants pour un symbole"""
+    try:
+        logging.info(f"🔍 Recherche ordres TP/SL existants pour {symbol}")
+        
+        # Récupérer tous les ordres ouverts
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        
+        tp_sl_orders = [
+            order for order in open_orders 
+            if order['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']
+        ]
+        
+        if not tp_sl_orders:
+            logging.info(f"✅ Aucun ordre TP/SL trouvé pour {symbol}")
+            return True
+        
+        logging.info(f"⚠️ {len(tp_sl_orders)} ordre(s) TP/SL trouvé(s) - Annulation...")
+        
+        # Annuler chaque ordre TP/SL
+        for order in tp_sl_orders:
+            try:
+                client.futures_cancel_order(
+                    symbol=symbol, 
+                    orderId=order['orderId']
+                )
+                logging.info(f"✅ Ordre {order['type']} {order['orderId']} annulé")
+                time.sleep(0.2)  # Petit délai entre les annulations
+            except Exception as e:
+                logging.warning(f"⚠️ Échec annulation ordre {order['orderId']}: {e}")
+        
+        logging.info(f"🎯 Tous les ordres TP/SL précédents annulés pour {symbol}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"❌ Erreur purge ordres TP/SL: {e}")
+        return False
 # ==================== PLACEMENT DES ORDRES AVEC closePosition ====================
 def place_tp_sl_orders_with_retry(symbol, signal, entry_price, level_config, max_retries=3):
-    """Place les ordres Take Profit et Stop Loss avec retry en cas d'échec"""
+    """Place les ordres Take Profit et Stop Loss APRÈS avoir purgé les anciens"""
+    # 🔥 ÉTAPE CRITIQUE : Purger les ordres TP/SL existants
+    logging.info(f"🧹 Purge des ordres TP/SL existants pour {symbol}")
+    cancel_success = cancel_existing_tp_sl_orders(symbol)
+    
+    if not cancel_success:
+        logging.warning("⚠️ Échec partiel de la purge, continuation...")
+    
+    # Pause de sécurité après annulation
+    time.sleep(1)
+    
+    # Calcul des prix TP/SL (inchangé)
     tp_pct = level_config["tp_pct"]
     sl_pct = level_config["sl_pct"]
     
@@ -497,9 +522,8 @@ def place_tp_sl_orders_with_retry(symbol, signal, entry_price, level_config, max
     tp_price = round(tp_price, price_precision)
     sl_price = round(sl_price, price_precision)
     
-    logging.info(f"🎯 TP: {tp_price} (précision: {price_precision}), SL: {sl_price}")
+    logging.info(f"🎯 Nouveaux prix - TP: {tp_price}, SL: {sl_price} (précision: {price_precision})")
     
-    # Ordre Take Profit avec closePosition
     tp_order_id = None
     sl_order_id = None
     
@@ -515,7 +539,7 @@ def place_tp_sl_orders_with_retry(symbol, signal, entry_price, level_config, max
                 timeInForce="GTC"
             )
             tp_order_id = tp_order.get("orderId")
-            logging.info(f"✅ TP placé: {tp_order_id}")
+            logging.info(f"✅ NOUVEAU TP placé: {tp_order_id} @ {tp_price}")
             break
         except Exception as e:
             logging.error(f"❌ Erreur placement TP (tentative {attempt+1}/{max_retries}): {e}")
@@ -536,7 +560,7 @@ def place_tp_sl_orders_with_retry(symbol, signal, entry_price, level_config, max
                 timeInForce="GTC"
             )
             sl_order_id = sl_order.get("orderId")
-            logging.info(f"✅ SL placé: {sl_order_id}")
+            logging.info(f"✅ NOUVEAU SL placé: {sl_order_id} @ {sl_price}")
             break
         except Exception as e:
             logging.error(f"❌ Erreur placement SL (tentative {attempt+1}/{max_retries}): {e}")
@@ -634,7 +658,7 @@ def monitor_loop():
                             logging.info(f"🎯 TP exécuté pour {symbol} (niveau {current_level})")
                             # Annuler SL
                             if sl_order_id:
-                                safe_cancel(symbol, sl_order_id)
+                                cancel_order(symbol, sl_order_id)
                             
                             # Ajouter à l'historique
                             history_data = {
@@ -662,7 +686,7 @@ def monitor_loop():
                             logging.info(f"🛑 SL exécuté pour {symbol} (niveau {current_level})")
                             # Annuler TP
                             if tp_order_id:
-                                safe_cancel(symbol, tp_order_id)
+                                cancel_order(symbol, tp_order_id)
                             
                             # Ajouter à l'historique
                             history_data = {
@@ -712,9 +736,9 @@ def monitor_loop():
                                 
                                 position["is_active"] = False
                                 if tp_order_id:
-                                    safe_cancel(symbol, tp_order_id)
+                                    cancel_order(symbol, tp_order_id)
                                 if sl_order_id:
-                                    safe_cancel(symbol, sl_order_id)
+                                    cancel_order(symbol, sl_order_id)
                                 save_state(state)
                             else:
                                 logging.debug(f"⏳ Position {symbol} trop récente pour nettoyage ({time_diff:.1f}s)")
@@ -1219,6 +1243,35 @@ async def get_levels():
         "total_levels": len(LEVELS),
         "total_capital": sum(level["capital"] for level in LEVELS)
     }
+
+@app.get("/orders/{symbol}")
+async def get_symbol_orders(symbol: str):
+    """Vérifie tous les ordres ouverts pour un symbole"""
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        
+        # Filtrer seulement les TP/SL
+        tp_sl_orders = [
+            {
+                "orderId": order["orderId"],
+                "type": order["type"],
+                "side": order["side"],
+                "stopPrice": order.get("stopPrice", "N/A"),
+                "status": order["status"],
+                "time": datetime.fromtimestamp(order["time"]/1000).isoformat()
+            }
+            for order in open_orders 
+            if order["type"] in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]
+        ]
+        
+        return {
+            "symbol": symbol,
+            "total_open_orders": len(open_orders),
+            "tp_sl_orders": tp_sl_orders,
+            "tp_sl_count": len(tp_sl_orders)
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
