@@ -883,6 +883,15 @@ async def process_trading_signal(signal, symbol, price, data, webhook_source="pr
                 else:
                     # Nettoyer l'état si position fermée
                     del state["positions"][symbol]
+        # ==================== VÉRIFICATION ORDRES RÉSIDUELS ====================
+        try:
+            open_orders = client.futures_get_open_orders(symbol=symbol)
+            for order in open_orders:
+                if order['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']:
+                    logging.info(f"🔧 Nettoyage ordre résiduel {order['type']} (id: {order['orderId']})")
+                    client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+        except Exception as e:
+            logging.warning(f"⚠️ Erreur nettoyage ordres résiduels: {e}")
         
         # OUVERTURE NOUVELLE POSITION (niveau 1)
         level_config = LEVELS[0]
