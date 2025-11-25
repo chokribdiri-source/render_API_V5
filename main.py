@@ -250,11 +250,13 @@ else:
 
 # Ta stratégie de niveaux
 LEVELS = [
-    {"capital": 1.0,  "leverage": 50, "tp_pct": 0.01, "sl_pct": 0.01},
-    {"capital": 2.0,  "leverage": 50, "tp_pct": 0.01, "sl_pct": 0.01},
-    {"capital": 4.5,  "leverage": 50, "tp_pct": 0.01, "sl_pct": 0.01},
-    {"capital": 9.5,  "leverage": 50, "tp_pct": 0.01, "sl_pct": 0.01},
-    {"capital": 16.0, "leverage": 65, "tp_pct": 0.01, "sl_pct": 0.01},
+    {"capital": 1.5,  "leverage": 50, "tp_pct": 0.01, "sl_pct": 0.01},
+    {"capital": 3.2,  "leverage": 50, "tp_pct": 0.0101, "sl_pct": 0.01},
+    {"capital": 6.6,  "leverage": 50, "tp_pct": 0.0103, "sl_pct": 0.01},
+    {"capital": 13.6,  "leverage": 50, "tp_pct": 0.0104, "sl_pct": 0.01},
+    {"capital": 23.2, "leverage": 60, "tp_pct": 0.0105, "sl_pct": 0.01},
+    {"capital": 44.1, "leverage": 65, "tp_pct": 0.0105, "sl_pct": 0.01},
+    {"capital": 61.0, "leverage": 80, "tp_pct": 0.013, "sl_pct": 0.01},
 ]
 
 # ==================== GESTION D'ÉTAT AVEC VERROUS ====================
